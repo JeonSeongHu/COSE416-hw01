@@ -250,14 +250,27 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # 전처리기 초기화
-    preprocessor = PointCloudPreprocessor(device=device, voxel_size=0.2)
+    preprocessor = PointCloudPreprocessor(device=device, voxel_size=0.2, 
+                                        plane_distance_threshold=0.15,)
 
     # 보행자 검출기 초기화
     detector = PedestrianDetector(eps=0.01, min_samples=7, movement_threshold=0.01, 
-                                  decay_rate=0.9, displacement_threshold=0.04, device=device)
+                                  decay_rate=0.9, displacement_threshold=0.04, device=device,
+                                  
+)
 
     # 데이터 폴더 경로
-    folder_path = "data/01_straight_walk/pcd"
+    FOLDERS = [
+        "data/01_straight_walk/pcd",
+        "data/02_straight_duck_walk/pcd",
+        "data/03_straight_crawl/pcd",
+        "data/04_zigzag_walk/pcd",
+        "data/05_straight_duck_walk/pcd",
+        "data/06_straight_crawl/pcd",
+        "data/07_straight_walk/pcd",
+    ]
+
+    folder_path = FOLDERS[2]
 
     # 포인트 클라우드 시퀀스 전처리
     processed_sequence = preprocessor.process_folder(folder_path, num=100)
