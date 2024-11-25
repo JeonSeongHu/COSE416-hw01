@@ -1,136 +1,277 @@
 import open3d as o3d
 import torch
 import numpy as np
-from utils.preprocessor import PointCloudPreprocessor
-from utils.BEVEncoder import BEVEncoder
-from viewer.PCDViewer import PCDViewer
-
-o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Debug)
-
-import cv2
 import os
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # For color maps
 
-def create_bev_video(bev_sequence, video_path, fps=5):
-    """
-    Create a BEV video from a sequence of BEV maps.
+from utils.preprocessor import PointCloudPreprocessor
+from utils.PedestrianDetector import PedestrianDetector
 
-    Parameters:
-    - bev_sequence (torch.Tensor): (B, H, W) tensor of BEV maps.
-    - video_path (str): Path to save the output video.
-    - fps (int): Frames per second for the video.
-    """
-    bev_height, bev_width = bev_sequence[0].shape
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Use 'XVID' for AVI
-    video_writer = cv2.VideoWriter(video_path, fourcc, fps, (bev_width, bev_height))
+class PCDViewer:
+    def __init__(self, window_name="PCD Viewer", axis_size=0.05, window_width=1024, window_height=1024):
+        """
+        Initialize the PCDViewer class.
 
-    # Write each BEV frame to the video
-    for i, bev_map in enumerate(bev_sequence):
-        frame = bev_to_frame(bev_map.cpu().numpy())
-        video_writer.write(frame)
-        print(f"Added frame {i + 1}/{len(bev_sequence)} to BEV video.")
+        Parameters:
+        - window_name (str): Name of the Open3D visualization window.
+        - axis_size (float): Size of the coordinate axes.
+        - window_width (int): Width of the visualization window.
+        - window_height (int): Height of the visualization window.
+        """
+        self.window_name = window_name
+        self.window_width = window_width
+        self.window_height = window_height
 
-    # Release the video writer
-    video_writer.release()
-    print(f"BEV video saved to: {video_path}")
+        # Ensure window dimensions are positive
+        if self.window_width <= 0 or self.window_height <= 0:
+            raise ValueError("Window width and height must be greater than zero.")
 
+        self.vis = o3d.visualization.VisualizerWithKeyCallback()
+        self.vis.create_window(window_name=self.window_name, width=self.window_width, height=self.window_height)
 
-def create_residual_bev_video(processed_sequence, video_path, voxel_size=0.1, fps=5):
-    """
-    Create a residual BEV video from a sequence of point clouds.
+        self.current_index = 0
+        self.pcd_data = []  # Storage for PCD data to visualize
+        self.residuals_and_clusters = []  # Storage for residuals and clusters data
+        self.coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size, origin=[0, 0, 0])
 
-    Parameters:
-    - processed_sequence (list of torch.Tensor): Preprocessed point cloud sequence.
-    - video_path (str): Path to save the output video.
-    - voxel_size (float): Size of each voxel in meters.
-    - fps (int): Frames per second for the video.
-    """
-    # Define BEV Encoder parameters
-    x_range = (-0.5, 0.5)  # meters
-    y_range = (-0.5, 0.5)  # meters
-    z_range = (-0.5, 0.5)    # meters
+        # Initialize camera parameters
+        self.camera_params = None
 
-    # Initialize BEV Encoder
-    bev_encoder = BEVEncoder(x_range, y_range, z_range, voxel_size)
+        # Register keyboard callback functions
+        self.vis.register_key_callback(ord("N"), self.next_frame)
+        self.vis.register_key_callback(ord("P"), self.prev_frame)
+        self.vis.register_key_callback(ord("Q"), self.quit_viewer)
 
-    # Encode the sequence into BEV maps
-    bev_sequence = bev_encoder.encode_sequence(processed_sequence)
-    print(f"BEV sequence shape: {bev_sequence.shape}")  # Shape: (B, H, W)
+    def update_camera_intrinsics(self):
+        """
+        Ensure that camera intrinsics match the current window size.
+        """
+        if self.camera_params is not None:
+            fx, fy = self.camera_params.intrinsic.get_focal_length()
+            # Open3D requires cx and cy to be at the image center
+            cx = (self.window_width - 1) / 2.0
+            cy = (self.window_height - 1) / 2.0
 
-    # Save the full BEV video
-    full_bev_video_path = video_path.replace("residual_", "full_")
-    create_bev_video(bev_sequence, full_bev_video_path, fps=fps)
+            # Ensure fx and fy are valid
+            fx = fx if fx > 0 else self.window_width / 2.0
+            fy = fy if fy > 0 else self.window_height / 2.0
 
-    # Compute residual BEV maps
-    residual_bevs = []
-    for i in range(1, len(bev_sequence)):
-        residual_bev = bev_sequence[i] - bev_sequence[i - 1]
-        residual_bevs.append(residual_bev.cpu().numpy())
+            # Update intrinsic parameters with valid values
+            self.camera_params.intrinsic.set_intrinsics(
+                width=self.window_width,
+                height=self.window_height,
+                fx=fx,
+                fy=fy,
+                cx=cx,
+                cy=cy
+            )
 
-    # Create video writer for residual BEV maps
-    bev_height, bev_width = residual_bevs[0].shape
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Use 'XVID' for AVI
-    video_writer = cv2.VideoWriter(video_path, fourcc, fps, (bev_width, bev_height))
+    def load_frame(self, index):
+        self.vis.clear_geometries()
+        if 0 <= index < len(self.pcd_data):
+            static_pcd = self.pcd_data[index]
+            static_pcd.paint_uniform_color([0.5, 0.5, 0.5])
+            self.vis.add_geometry(static_pcd)
+            self.vis.add_geometry(self.coordinate_frame)
 
-    # Write each residual BEV frame to the video
-    for i, residual in enumerate(residual_bevs):
-        frame = residual_to_frame(residual)
-        video_writer.write(frame)
-        print(f"Added frame {i + 1}/{len(residual_bevs)} to residual BEV video.")
+            residual_list, moving_clusters = self.residuals_and_clusters[index]
+            self.add_clusters(moving_clusters)
+            self.get_pcd_statistics(self.pcd_data[index])
+        else:
+            print(f"Invalid index: {index}")
+            return
 
-    # Release the video writer
-    video_writer.release()
-    print(f"Residual BEV video saved to: {video_path}")
+        if self.camera_params is not None:
+            try:
+                view_control = self.vis.get_view_control()
+                self.update_camera_intrinsics()  # Ensure intrinsic parameters match the window
+                view_control.convert_from_pinhole_camera_parameters(self.camera_params)
+            except Exception as e:
+                print(f"Warning: Failed to apply camera pose. {e}")
+        else:
+            self.vis.poll_events()
+            self.vis.update_renderer()
+            self.get_camera_pose()
 
+        self.vis.poll_events()
+        self.vis.update_renderer()
+        print(f"Loaded frame {index + 1}/{len(self.pcd_data)}.")
 
-def bev_to_frame(bev_map):
-    """
-    Convert a BEV map to a frame suitable for video writing.
+    def add_clusters(self, moving_clusters):
+        """
+        Add clusters and assign unique colors to each for better visualization.
 
-    Parameters:
-    - bev_map (np.ndarray): 2D BEV map.
+        Parameters:
+        - moving_clusters (list of np.ndarray): List of cluster points.
+        """
+        if not moving_clusters:
+            print("No clusters to visualize.")
+            return
 
-    Returns:
-    - frame (np.ndarray): 3-channel (BGR) frame for video writing.
-    """
-    # Normalize BEV values for visualization
-    bev_normalized = (bev_map - bev_map.min()) / (bev_map.max() - bev_map.min())
-    bev_normalized = (bev_normalized * 255).astype(np.uint8)
+        # Generate unique colors for each cluster
+        num_clusters = len(moving_clusters)
+        colors = self.get_n_colors(num_clusters)
 
-    # Convert to a 3-channel BGR image for video writing
-    frame = cv2.applyColorMap(bev_normalized, cv2.COLORMAP_HOT)
-    return frame
+        for idx, cluster in enumerate(moving_clusters):
+            cluster_pcd = o3d.geometry.PointCloud()
+            cluster_pcd.points = o3d.utility.Vector3dVector(cluster)
 
+            # Assign a unique color to each cluster
+            color = colors[idx]
+            cluster_pcd.paint_uniform_color(color)
+            self.vis.add_geometry(cluster_pcd)
 
-def residual_to_frame(residual_bev):
-    """
-    Convert a residual BEV map to a frame suitable for video writing.
+            # Add bounding box
+            bbox = cluster_pcd.get_axis_aligned_bounding_box()
+            bbox.color = color
+            self.vis.add_geometry(bbox)
 
-    Parameters:
-    - residual_bev (np.ndarray): 2D residual BEV map.
+    def get_n_colors(self, n):
+        """
+        Generate n unique colors.
 
-    Returns:
-    - frame (np.ndarray): 3-channel (BGR) frame for video writing.
-    """
-    # Normalize residual values for visualization
-    residual_normalized = (residual_bev - residual_bev.min()) / (residual_bev.max() - residual_bev.min())
-    residual_normalized = (residual_normalized * 255).astype(np.uint8)
+        Parameters:
+        - n (int): Number of colors to generate.
 
-    # Convert to a 3-channel BGR image for video writing
-    frame = cv2.applyColorMap(residual_normalized, cv2.COLORMAP_HOT)
-    return frame
+        Returns:
+        - list of RGB colors.
+        """
+        colors = plt.cm.get_cmap('hsv', n)
+        return [colors(i)[:3] for i in range(n)]
 
+    def get_pcd_statistics(self, pcd):
+        """
+        Print basic statistics of the given point cloud.
 
-if __name__ == "__main__":
-    # Preprocess the point cloud sequence
+        Parameters:
+        - pcd (o3d.geometry.PointCloud): Point cloud.
+        """
+        points = np.asarray(pcd.points)
+        min_bound = points.min(axis=0)
+        max_bound = points.max(axis=0)
+        center = points.mean(axis=0)
+
+        print(f"Point Cloud Statistics:")
+        print(f"  Min Bound: {min_bound}")
+        print(f"  Max Bound: {max_bound}")
+        print(f"  Center: {center}")
+
+    def get_camera_pose(self):
+        """
+        Get and store the current camera parameters of the visualization window.
+        """
+        view_control = self.vis.get_view_control()
+        self.camera_params = view_control.convert_to_pinhole_camera_parameters()
+
+        # Ensure intrinsic parameters match the window size
+        fx, fy = self.camera_params.intrinsic.get_focal_length()
+        # Open3D requires cx and cy to be at the image center
+        cx = (self.window_width - 1) / 2.0
+        cy = (self.window_height - 1) / 2.0
+
+        # Ensure fx and fy are valid
+        fx = fx if fx > 0 else self.window_width / 2.0
+        fy = fy if fy > 0 else self.window_height / 2.0
+
+        self.camera_params.intrinsic.set_intrinsics(
+            width=self.window_width,
+            height=self.window_height,
+            fx=fx,
+            fy=fy,
+            cx=cx,
+            cy=cy
+        )
+
+    def next_frame(self, vis):
+        """
+        Callback function to load the next frame.
+
+        Parameters:
+        - vis (open3d.visualization.Visualizer): Open3D visualization object.
+        """
+        if self.current_index < len(self.pcd_data) - 1:
+            self.get_camera_pose()  # Store current camera pose
+            self.current_index += 1
+            self.load_frame(self.current_index)
+        else:
+            print("Already at the last frame.")
+        return False
+
+    def prev_frame(self, vis):
+        """
+        Callback function to load the previous frame.
+
+        Parameters:
+        - vis (open3d.visualization.Visualizer): Open3D visualization object.
+        """
+        if self.current_index > 0:
+            self.get_camera_pose()  # Store current camera pose
+            self.current_index -= 1
+            self.load_frame(self.current_index)
+        else:
+            print("Already at the first frame.")
+        return False
+
+    def quit_viewer(self, vis):
+        """
+        Callback function to exit the visualization window.
+
+        Parameters:
+        - vis (open3d.visualization.Visualizer): Open3D visualization object.
+        """
+        print("Exiting viewer.")
+        self.vis.destroy_window()
+        return False
+
+    def run(self, processed_sequence, residuals_and_clusters):
+        """
+        Run the visualization window.
+
+        Parameters:
+        - processed_sequence (list of torch.Tensor): Sequence of point clouds.
+        - residuals_and_clusters (list of tuples): (residual_list, moving_clusters) pairs for each frame.
+        """
+        if not processed_sequence:
+            print("No PCD data loaded. Please load PCD data before running the viewer.")
+            return
+
+        self.pcd_data = [
+            o3d.geometry.PointCloud(o3d.utility.Vector3dVector(frame.cpu().numpy()))
+            for frame in processed_sequence
+        ]
+        self.residuals_and_clusters = residuals_and_clusters
+
+        self.load_frame(self.current_index)
+        self.vis.run()
+        self.vis.destroy_window()
+
+def main():
+    # 디바이스 설정
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    preprocessor = PointCloudPreprocessor(device=device)
 
+    # 전처리기 초기화
+    preprocessor = PointCloudPreprocessor(device=device, voxel_size=0.2)
+
+    # 보행자 검출기 초기화
+    detector = PedestrianDetector(eps=0.01, min_samples=7, movement_threshold=0.01, 
+                                  decay_rate=0.9, displacement_threshold=0.04, device=device)
+
+    # 데이터 폴더 경로
     folder_path = "data/01_straight_walk/pcd"
-    processed_sequence = preprocessor.process_folder(folder_path, num=30)
+
+    # 포인트 클라우드 시퀀스 전처리
+    processed_sequence = preprocessor.process_folder(folder_path, num=100)
     print(f"Processed {len(processed_sequence)} frames from folder.")
 
-    # Create and save BEV and Residual BEV videos
-    residual_video_path = "output/residual_bev.mp4"
-    os.makedirs(os.path.dirname(residual_video_path), exist_ok=True)
-    create_residual_bev_video(processed_sequence, residual_video_path, voxel_size=0.0005, fps=5)
+    # Residuals and clusters collection
+    residuals_and_clusters = []
+    for frame in processed_sequence:
+        moving_clusters, residual_list = detector.detect(frame)
+        residuals_and_clusters.append((residual_list, moving_clusters))
+
+    # PCD Viewer 실행
+    viewer = PCDViewer(window_name="Pedestrian Detection Viewer", axis_size=0.05)
+    viewer.run(processed_sequence, residuals_and_clusters)
+
+if __name__ == "__main__":
+    main()
