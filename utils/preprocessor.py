@@ -158,7 +158,7 @@ class PointCloudPreprocessor:
             logging.info("Processing all files in the folder.")
             num = len(os.listdir(folder_path))
 
-        pcd_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.pcd')][:num])
+        pcd_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.pcd')][1:num])
         processed_sequence = []
 
         for idx, file in enumerate(pcd_files):
