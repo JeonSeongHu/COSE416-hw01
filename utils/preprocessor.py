@@ -19,6 +19,10 @@ class PointCloudPreprocessor:
         apply_voxel_downsample=True,
         apply_sor=True,
         apply_ror=True,
+        apply_plane_removal=True,  # 평면 제거 기능 추가
+        plane_distance_threshold=0.05,
+        plane_ransac_n=3,
+        plane_num_iterations=1000,
     ):
         """
         Point Cloud Preprocessor.
@@ -33,6 +37,10 @@ class PointCloudPreprocessor:
         - apply_voxel_downsample (bool): Voxel downsampling 적용 여부.
         - apply_sor (bool): SOR 적용 여부.
         - apply_ror (bool): ROR 적용 여부.
+        - apply_plane_removal (bool): 평면 제거 적용 여부.
+        - plane_distance_threshold (float): 평면 분할 시 거리 임계값.
+        - plane_ransac_n (int): RANSAC에서 선택할 포인트 수.
+        - plane_num_iterations (int): RANSAC 반복 횟수.
         """
         self.device = torch.device(device)
         self.voxel_size = voxel_size
@@ -43,6 +51,10 @@ class PointCloudPreprocessor:
         self.apply_voxel_downsample = apply_voxel_downsample
         self.apply_sor = apply_sor
         self.apply_ror = apply_ror
+        self.apply_plane_removal = apply_plane_removal  # 평면 제거 적용 여부
+        self.plane_distance_threshold = plane_distance_threshold
+        self.plane_ransac_n = plane_ransac_n
+        self.plane_num_iterations = plane_num_iterations
         self.anchor_frame = None  # Anchor frame 저장
         self.anchor_transform = None  # Anchor frame의 좌표계
         self.anchor_mean = None  # Anchor frame의 mean 저장
@@ -83,6 +95,23 @@ class PointCloudPreprocessor:
         filtered_pcd = pcd.select_by_index(ind)
         filtered_points = torch.tensor(np.asarray(filtered_pcd.points), device=self.device, dtype=torch.float32)
         logging.info(f"ROR complete. Points reduced from {point_cloud.shape[0]} to {filtered_points.shape[0]}")
+        return filtered_points
+
+    def remove_plane(self, point_cloud):
+        logging.info("Detecting and removing plane (road) from point cloud.")
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(point_cloud.cpu().numpy())
+
+        plane_model, inliers = pcd.segment_plane(
+            distance_threshold=self.plane_distance_threshold,
+            ransac_n=self.plane_ransac_n,
+            num_iterations=self.plane_num_iterations,
+        )
+
+        logging.info(f"Plane detected: {plane_model}")
+        pcd_without_plane = pcd.select_by_index(inliers, invert=True)
+        filtered_points = torch.tensor(np.asarray(pcd_without_plane.points), device=self.device, dtype=torch.float32)
+        logging.info(f"Plane removal complete. Points reduced from {point_cloud.shape[0]} to {filtered_points.shape[0]}")
         return filtered_points
 
     def normalize_with_anchor(self, point_cloud):
@@ -131,6 +160,8 @@ class PointCloudPreprocessor:
             point_cloud = self.sor_outlier_removal(point_cloud)
         if self.apply_ror:
             point_cloud = self.ror_outlier_removal(point_cloud)
+        if self.apply_plane_removal:
+            point_cloud = self.remove_plane(point_cloud)  # 평면 제거 단계 추가
 
         if self.anchor_mean is not None and self.anchor_max_distance is not None:
             point_cloud = self.normalize_with_anchor(point_cloud)
@@ -142,14 +173,14 @@ class PointCloudPreprocessor:
     def process_frame(self, frame):
         if self.anchor_frame is None:
             raise ValueError("Anchor frame is not set. Call `set_anchor_frame` first.")
-        
+
         logging.info("Processing frame against anchor frame.")
         frame = self.preprocess(frame)
         # registered_frame, _ = self.register_frames(frame, self.anchor_frame)
         # return registered_frame
         return frame
 
-    def process_folder(self, folder_path, num = None):
+    def process_folder(self, folder_path, num=None):
         logging.info(f"Processing folder: {folder_path}")
 
         if num is not None:
@@ -158,7 +189,7 @@ class PointCloudPreprocessor:
             logging.info("Processing all files in the folder.")
             num = len(os.listdir(folder_path))
 
-        pcd_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.pcd')][1:num])
+        pcd_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.pcd')])[1:num]
         processed_sequence = []
 
         for idx, file in enumerate(pcd_files):
