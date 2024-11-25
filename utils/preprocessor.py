@@ -19,10 +19,11 @@ class PointCloudPreprocessor:
         apply_voxel_downsample=True,
         apply_sor=True,
         apply_ror=True,
-        apply_plane_removal=True,  # 평면 제거 기능 추가
+        apply_plane_removal=True,
         plane_distance_threshold=0.05,
         plane_ransac_n=3,
         plane_num_iterations=1000,
+        ignore_preprocessing=False
     ):
         """
         Point Cloud Preprocessor.
@@ -41,6 +42,7 @@ class PointCloudPreprocessor:
         - plane_distance_threshold (float): 평면 분할 시 거리 임계값.
         - plane_ransac_n (int): RANSAC에서 선택할 포인트 수.
         - plane_num_iterations (int): RANSAC 반복 횟수.
+        - ignore_preprocessing (bool): 전처리 무시 여부.
         """
         self.device = torch.device(device)
         self.voxel_size = voxel_size
@@ -55,6 +57,7 @@ class PointCloudPreprocessor:
         self.plane_distance_threshold = plane_distance_threshold
         self.plane_ransac_n = plane_ransac_n
         self.plane_num_iterations = plane_num_iterations
+        self.ignore_preprocessing = ignore_preprocessing
         self.anchor_frame = None  # Anchor frame 저장
         self.anchor_transform = None  # Anchor frame의 좌표계
         self.anchor_mean = None  # Anchor frame의 mean 저장
@@ -161,7 +164,7 @@ class PointCloudPreprocessor:
         if self.apply_ror:
             point_cloud = self.ror_outlier_removal(point_cloud)
         if self.apply_plane_removal:
-            point_cloud = self.remove_plane(point_cloud)  # 평면 제거 단계 추가
+            point_cloud = self.remove_plane(point_cloud) 
 
         if self.anchor_mean is not None and self.anchor_max_distance is not None:
             point_cloud = self.normalize_with_anchor(point_cloud)
@@ -201,7 +204,10 @@ class PointCloudPreprocessor:
             if idx == 0:
                 self.set_anchor_frame(frame)
             else:
-                processed_frame = self.process_frame(frame)
+                if self.ignore_preprocessing:
+                    processed_frame = frame
+                else:
+                    processed_frame = self.process_frame(frame)
                 processed_sequence.append(processed_frame)
 
         logging.info("Folder processing complete.")
