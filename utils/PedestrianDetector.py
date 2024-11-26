@@ -171,7 +171,7 @@ class PedestrianDetector:
             missed_frames = cluster_info['missed_frames']
             displacement = np.linalg.norm(cluster_info['centroid'] - cluster_info['initial_centroid'])
             
-            print(f"Cluster {cluster_id}: residual={cumulative_residual:.2f}, displacement={displacement:.2f}, missed_frames={missed_frames}")
+            # print(f"Cluster {cluster_id}: residual={cumulative_residual:.2f}, displacement={displacement:.2f}, missed_frames={missed_frames}")
             # 누적 이동 거리와 변위를 모두 고려하여 움직임 판단
             if (cumulative_residual > self.movement_threshold and displacement > self.displacement_threshold) and missed_frames == 0:
                 moving_clusters.append(cluster_info['cluster'])
@@ -182,3 +182,4 @@ class PedestrianDetector:
                 })
 
         return moving_clusters, residual_list
+1

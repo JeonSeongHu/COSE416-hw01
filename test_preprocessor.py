@@ -7,64 +7,53 @@ import matplotlib.pyplot as plt  # For color maps
 from utils.preprocessor import PointCloudPreprocessor
 from utils.PedestrianDetector import PedestrianDetector
 
+import open3d as o3d
+import numpy as np
+import matplotlib.pyplot as plt
+
+import open3d as o3d
+import numpy as np
+import matplotlib.pyplot as plt
+
 class PCDViewer:
     def __init__(self, window_name="PCD Viewer", axis_size=0.05, window_width=1024, window_height=1024):
         """
-        Initialize the PCDViewer class.
+        PCDViewer 클래스를 초기화합니다.
 
-        Parameters:
-        - window_name (str): Name of the Open3D visualization window.
-        - axis_size (float): Size of the coordinate axes.
-        - window_width (int): Width of the visualization window.
-        - window_height (int): Height of the visualization window.
+        매개변수:
+        - window_name (str): Open3D 시각화 창의 이름.
+        - axis_size (float): 좌표축의 크기.
+        - window_width (int): 시각화 창의 너비.
+        - window_height (int): 시각화 창의 높이.
         """
         self.window_name = window_name
         self.window_width = window_width
         self.window_height = window_height
 
-        # Ensure window dimensions are positive
+        # 창의 크기가 양수인지 확인
         if self.window_width <= 0 or self.window_height <= 0:
-            raise ValueError("Window width and height must be greater than zero.")
+            raise ValueError("창의 너비와 높이는 0보다 커야 합니다.")
 
         self.vis = o3d.visualization.VisualizerWithKeyCallback()
         self.vis.create_window(window_name=self.window_name, width=self.window_width, height=self.window_height)
 
         self.current_index = 0
-        self.pcd_data = []  # Storage for PCD data to visualize
-        self.residuals_and_clusters = []  # Storage for residuals and clusters data
+        self.pcd_data = []  # 시각화할 PCD 데이터를 저장
+        self.residuals_and_clusters = []  # 잔차 및 클러스터 데이터를 저장
         self.coordinate_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size, origin=[0, 0, 0])
 
-        # Initialize camera parameters
-        self.camera_params = None
+        # 초기 카메라 파라미터 설정
+        self.initial_camera_parameters = {
+            'lookat': np.array([0.0, 0.1, 0.0]),
+            'up': np.array([0.0, 0.5, 0.3]),    # 'up' 벡터를 약간 기울였습니다.
+            'front': np.array([0, -1.4, 1.0]), # 'front' 벡터를 조정하여 카메라 시점을 변경했습니다.
+            'zoom': 0.3
+        }
 
-        # Register keyboard callback functions
+        # 키보드 콜백 함수 등록
         self.vis.register_key_callback(ord("N"), self.next_frame)
         self.vis.register_key_callback(ord("P"), self.prev_frame)
         self.vis.register_key_callback(ord("Q"), self.quit_viewer)
-
-    def update_camera_intrinsics(self):
-        """
-        Ensure that camera intrinsics match the current window size.
-        """
-        if self.camera_params is not None:
-            fx, fy = self.camera_params.intrinsic.get_focal_length()
-            # Open3D requires cx and cy to be at the image center
-            cx = (self.window_width - 1) / 2.0
-            cy = (self.window_height - 1) / 2.0
-
-            # Ensure fx and fy are valid
-            fx = fx if fx > 0 else self.window_width / 2.0
-            fy = fy if fy > 0 else self.window_height / 2.0
-
-            # Update intrinsic parameters with valid values
-            self.camera_params.intrinsic.set_intrinsics(
-                width=self.window_width,
-                height=self.window_height,
-                fx=fx,
-                fy=fy,
-                cx=cx,
-                cy=cy
-            )
 
     def load_frame(self, index):
         self.vis.clear_geometries()
@@ -78,37 +67,32 @@ class PCDViewer:
             self.add_clusters(moving_clusters)
             self.get_pcd_statistics(self.pcd_data[index])
         else:
-            print(f"Invalid index: {index}")
+            print(f"유효하지 않은 인덱스입니다: {index}")
             return
 
-        if self.camera_params is not None:
-            try:
-                view_control = self.vis.get_view_control()
-                self.update_camera_intrinsics()  # Ensure intrinsic parameters match the window
-                view_control.convert_from_pinhole_camera_parameters(self.camera_params)
-            except Exception as e:
-                print(f"Warning: Failed to apply camera pose. {e}")
-        else:
-            self.vis.poll_events()
-            self.vis.update_renderer()
-            self.get_camera_pose()
+        # 초기 카메라 파라미터 적용
+        view_control = self.vis.get_view_control()
+        view_control.set_lookat(self.initial_camera_parameters['lookat'])
+        view_control.set_up(self.initial_camera_parameters['up'])
+        view_control.set_front(self.initial_camera_parameters['front'])
+        view_control.set_zoom(self.initial_camera_parameters['zoom'])
 
         self.vis.poll_events()
         self.vis.update_renderer()
-        print(f"Loaded frame {index + 1}/{len(self.pcd_data)}.")
+        print(f"{index + 1}/{len(self.pcd_data)} 프레임을 로드했습니다.")
 
     def add_clusters(self, moving_clusters):
         """
-        Add clusters and assign unique colors to each for better visualization.
+        클러스터를 추가하고 각 클러스터에 고유한 색상을 지정하여 시각화를 개선합니다.
 
-        Parameters:
-        - moving_clusters (list of np.ndarray): List of cluster points.
+        매개변수:
+        - moving_clusters (list of np.ndarray): 클러스터 포인트들의 리스트.
         """
         if not moving_clusters:
-            print("No clusters to visualize.")
+            print("시각화할 클러스터가 없습니다.")
             return
 
-        # Generate unique colors for each cluster
+        # 각 클러스터에 대한 고유한 색상 생성
         num_clusters = len(moving_clusters)
         colors = self.get_n_colors(num_clusters)
 
@@ -116,123 +100,95 @@ class PCDViewer:
             cluster_pcd = o3d.geometry.PointCloud()
             cluster_pcd.points = o3d.utility.Vector3dVector(cluster)
 
-            # Assign a unique color to each cluster
+            # 각 클러스터에 고유한 색상 지정
             color = colors[idx]
             cluster_pcd.paint_uniform_color(color)
             self.vis.add_geometry(cluster_pcd)
 
-            # Add bounding box
+            # 바운딩 박스 추가
             bbox = cluster_pcd.get_axis_aligned_bounding_box()
             bbox.color = color
             self.vis.add_geometry(bbox)
 
     def get_n_colors(self, n):
         """
-        Generate n unique colors.
+        n개의 고유한 색상을 생성합니다.
 
-        Parameters:
-        - n (int): Number of colors to generate.
+        매개변수:
+        - n (int): 생성할 색상의 수.
 
-        Returns:
-        - list of RGB colors.
+        반환값:
+        - RGB 색상의 리스트.
         """
         colors = plt.cm.get_cmap('hsv', n)
         return [colors(i)[:3] for i in range(n)]
 
     def get_pcd_statistics(self, pcd):
         """
-        Print basic statistics of the given point cloud.
+        주어진 포인트 클라우드의 기본 통계를 출력합니다.
 
-        Parameters:
-        - pcd (o3d.geometry.PointCloud): Point cloud.
+        매개변수:
+        - pcd (o3d.geometry.PointCloud): 포인트 클라우드.
         """
         points = np.asarray(pcd.points)
         min_bound = points.min(axis=0)
         max_bound = points.max(axis=0)
         center = points.mean(axis=0)
 
-        print(f"Point Cloud Statistics:")
-        print(f"  Min Bound: {min_bound}")
-        print(f"  Max Bound: {max_bound}")
-        print(f"  Center: {center}")
-
-    def get_camera_pose(self):
-        """
-        Get and store the current camera parameters of the visualization window.
-        """
-        view_control = self.vis.get_view_control()
-        self.camera_params = view_control.convert_to_pinhole_camera_parameters()
-
-        # Ensure intrinsic parameters match the window size
-        fx, fy = self.camera_params.intrinsic.get_focal_length()
-        # Open3D requires cx and cy to be at the image center
-        cx = (self.window_width - 1) / 2.0
-        cy = (self.window_height - 1) / 2.0
-
-        # Ensure fx and fy are valid
-        fx = fx if fx > 0 else self.window_width / 2.0
-        fy = fy if fy > 0 else self.window_height / 2.0
-
-        self.camera_params.intrinsic.set_intrinsics(
-            width=self.window_width,
-            height=self.window_height,
-            fx=fx,
-            fy=fy,
-            cx=cx,
-            cy=cy
-        )
+        print(f"포인트 클라우드 통계:")
+        print(f"  최소 경계: {min_bound}")
+        print(f"  최대 경계: {max_bound}")
+        print(f"  중심: {center}")
 
     def next_frame(self, vis):
         """
-        Callback function to load the next frame.
+        다음 프레임을 로드하는 콜백 함수입니다.
 
-        Parameters:
-        - vis (open3d.visualization.Visualizer): Open3D visualization object.
+        매개변수:
+        - vis (open3d.visualization.Visualizer): Open3D 시각화 객체.
         """
         if self.current_index < len(self.pcd_data) - 1:
-            self.get_camera_pose()  # Store current camera pose
             self.current_index += 1
             self.load_frame(self.current_index)
         else:
-            print("Already at the last frame.")
+            print("이미 마지막 프레임입니다.")
         return False
 
     def prev_frame(self, vis):
         """
-        Callback function to load the previous frame.
+        이전 프레임을 로드하는 콜백 함수입니다.
 
-        Parameters:
-        - vis (open3d.visualization.Visualizer): Open3D visualization object.
+        매개변수:
+        - vis (open3d.visualization.Visualizer): Open3D 시각화 객체.
         """
         if self.current_index > 0:
-            self.get_camera_pose()  # Store current camera pose
             self.current_index -= 1
             self.load_frame(self.current_index)
         else:
-            print("Already at the first frame.")
+            print("이미 첫 번째 프레임입니다.")
         return False
 
     def quit_viewer(self, vis):
         """
-        Callback function to exit the visualization window.
+        시각화 창을 종료하는 콜백 함수입니다.
 
-        Parameters:
-        - vis (open3d.visualization.Visualizer): Open3D visualization object.
+        매개변수:
+        - vis (open3d.visualization.Visualizer): Open3D 시각화 객체.
         """
-        print("Exiting viewer.")
+        print("뷰어를 종료합니다.")
         self.vis.destroy_window()
         return False
 
     def run(self, processed_sequence, residuals_and_clusters):
         """
-        Run the visualization window.
+        시각화 창을 실행합니다.
 
-        Parameters:
-        - processed_sequence (list of torch.Tensor): Sequence of point clouds.
-        - residuals_and_clusters (list of tuples): (residual_list, moving_clusters) pairs for each frame.
+        매개변수:
+        - processed_sequence (list of torch.Tensor): 포인트 클라우드 시퀀스.
+        - residuals_and_clusters (list of tuples): 각 프레임에 대한 (residual_list, moving_clusters) 쌍.
         """
         if not processed_sequence:
-            print("No PCD data loaded. Please load PCD data before running the viewer.")
+            print("로드된 PCD 데이터가 없습니다. 뷰어를 실행하기 전에 PCD 데이터를 로드하십시오.")
             return
 
         self.pcd_data = [
@@ -245,19 +201,24 @@ class PCDViewer:
         self.vis.run()
         self.vis.destroy_window()
 
+
+
 def main():
     # 디바이스 설정
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # 전처리기 초기화
-    preprocessor = PointCloudPreprocessor(device=device, voxel_size=0.2, 
-                                        plane_distance_threshold=0.15,)
+    preprocessor = PointCloudPreprocessor(device=device, voxel_size=0.3, 
+                                        plane_distance_threshold=0.3,
+                                        plane_num_iterations=1000)
+                                        #  apply_sor=False,
+                                        # apply_ror=False,
+                                        # apply_plane_removal=False,)
 
     # 보행자 검출기 초기화
-    detector = PedestrianDetector(eps=0.01, min_samples=7, movement_threshold=0.01, 
-                                  decay_rate=0.9, displacement_threshold=0.04, device=device,
-                                  
-)
+    detector = PedestrianDetector(eps=0.008, min_samples=4, movement_threshold=0.01, 
+                                  decay_rate=0.8, displacement_threshold=0.03, device=device,
+                                  )
 
     # 데이터 폴더 경로
     FOLDERS = [
@@ -270,10 +231,10 @@ def main():
         "data/07_straight_walk/pcd",
     ]
 
-    folder_path = FOLDERS[2]
+    folder_path = FOLDERS[4]
 
     # 포인트 클라우드 시퀀스 전처리
-    processed_sequence = preprocessor.process_folder(folder_path, num=100)
+    processed_sequence = preprocessor.process_folder(folder_path, num=300)
     print(f"Processed {len(processed_sequence)} frames from folder.")
 
     # Residuals and clusters collection
