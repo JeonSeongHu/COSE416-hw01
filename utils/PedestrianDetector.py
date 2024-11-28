@@ -76,7 +76,7 @@ class PedestrianDetector:
                 self.cluster_dict[cluster_id] = {
                     'initial_centroid': centroid,
                     'centroid': centroid,
-                    'cumulative_residual': self.movement_threshold // 2,
+                    'cumulative_residual': self.movement_threshold,
                     'cluster': cluster,
                     'missed_frames': 0
                 }
@@ -96,7 +96,7 @@ class PedestrianDetector:
             self.cluster_dict[cluster_id] = {
                 'initial_centroid': centroid,
                 'centroid': centroid,
-                'cumulative_residual': self.movement_threshold // 2,
+                'cumulative_residual': self.movement_threshold,
                 'cluster': cluster,
                 'missed_frames': 0
             }

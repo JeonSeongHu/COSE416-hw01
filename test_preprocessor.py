@@ -18,8 +18,8 @@ def main():
         sor_std_ratio=1.0,
         ror_nb_points=6,
         ror_radius=0.6,
-        plane_distance_threshold=0.3,
-        plane_num_iterations=50000,
+        plane_distance_threshold=0.2,
+        plane_num_iterations=5000,
         apply_sor=False,
         apply_ror=True,
         apply_plane_removal=True,
@@ -56,7 +56,7 @@ def main():
         print(f"Processing folder: {folder_path}")
         output_video_path = os.path.join(output_video_dir, f"output_{folder_path.split('/')[1]}.mp4")
 
-        processed_sequence = preprocessor.process_folder(folder_path, start_frame=0, end_frame=None)
+        processed_sequence = preprocessor.process_folder(folder_path, start_frame=0, end_frame=200)
         print(f"Processed {len(processed_sequence)} frames from {folder_path}.")
 
         residuals_and_clusters = []
