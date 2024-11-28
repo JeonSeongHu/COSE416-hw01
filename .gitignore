@@ -1,3 +1,5 @@
 /data
 .mp4
 *.pyc
+/output_videos
+*.json
